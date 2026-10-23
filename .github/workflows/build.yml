@@ -84,15 +84,7 @@ jobs:
 
       # Catches Windows-only problems (paths like C:/x vs C:\x, Tk behaviour) before building.
       - name: Run tests on Windows
-        shell: pwsh
-        run: |
-          $failed = 0
-          foreach ($i in 1..6) {
-            Write-Host "::notice title=round $i::starting"
-            pytest -v -rA
-            if ($LASTEXITCODE -ne 0) { $failed++; Write-Host "::error title=round $i::pytest exit code $LASTEXITCODE" }
-          }
-          if ($failed) { exit 1 }
+        run: pytest -v -rA
 
       - name: Build GUI exe
         run: >
