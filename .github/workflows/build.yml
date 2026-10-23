@@ -107,6 +107,10 @@ jobs:
           if (-not (Test-Path smoke_out\_trackbatch\trackmate_batch.py)) { throw "Jython script not bundled" }
           .\dist\trackbatch-cli.exe run -e utrack -i smoke -o smoke_out2 --dry-run
           if (-not (Test-Path smoke_out2\_trackbatch\trackbatch_utrack_batch.m)) { throw "MATLAB script not bundled" }
+          # smoke\a.tif is not a real TIFF, so the pre-check must report an error (exit code 1)
+          .\dist\trackbatch-cli.exe check -e trackmate -i smoke
+          if ($LASTEXITCODE -ne 1) { throw "check should have flagged the invalid TIFF" }
+          $global:LASTEXITCODE = 0
 
       - name: Upload exe
         uses: actions/upload-artifact@v4

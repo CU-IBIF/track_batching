@@ -16,6 +16,7 @@ from . import __version__
 from . import params as P
 from . import tools
 from .batch import BatchConfig, Job, discover_inputs, run_batch
+from .precheck import PrecheckResult, precheck
 from .previous import load_previous, matlab_export_params
 
 ENGINE_LABELS = {"trackmate": "TrackMate (Fiji)", "utrack": "u-track (MATLAB)"}
@@ -185,18 +186,42 @@ class App(tk.Tk):
         ttk.Button(bar, text="Add files…", command=self._add_files).pack(side="left")
         ttk.Button(bar, text="Add folder…", command=self._add_folder).pack(side="left", padx=4)
         ttk.Button(bar, text="Remove selected", command=self._remove_selected).pack(side="left", padx=4)
-        ttk.Button(bar, text="Clear", command=lambda: (self.files.delete(0, "end"), self._count())).pack(side="left")
+        ttk.Button(bar, text="Clear", command=self._clear_images).pack(side="left")
+        ttk.Button(bar, text="Check images", command=self._check_images).pack(side="left", padx=(12, 0))
         self.recursive = tk.BooleanVar(value=False)
         ttk.Checkbutton(bar, text="Folders: include subfolders", variable=self.recursive).pack(side="left", padx=12)
         self.count_lbl = ttk.Label(bar, text="0 images")
         self.count_lbl.pack(side="right")
         box = ttk.Frame(f)
         box.pack(fill="both", expand=True, pady=(8, 0))
-        self.files = tk.Listbox(box, selectmode="extended")
+        cols = (("size", "Size", 80), ("c", "C", 36), ("z", "Z", 40), ("t", "Frames", 56),
+                ("px", "Pixel size", 100), ("bits", "Bits", 48), ("check", "Check", 104))
+        self.files = ttk.Treeview(box, columns=[c[0] for c in cols], selectmode="extended")
+        self.files.heading("#0", text="Image")
+        self.files.column("#0", width=300, stretch=True)
+        for key, title, width in cols:
+            self.files.heading(key, text=title)
+            self.files.column(key, width=width, stretch=False, anchor="center")
+        self.files.tag_configure("error", foreground="#b00020")
+        self.files.tag_configure("warning", foreground="#a05a00")
         sb = ttk.Scrollbar(box, orient="vertical", command=self.files.yview)
         self.files.configure(yscrollcommand=sb.set)
         self.files.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
+        self.files.bind("<<TreeviewSelect>>", lambda e: self._show_image_issues())
+        self.image_paths: dict[str, str] = {}
+        self.precheck_result: PrecheckResult | None = None
+        issues_box = ttk.Frame(f)
+        issues_box.pack(fill="x", pady=(6, 0))
+        self.issues = tk.Text(issues_box, height=7, wrap="word", state="disabled", font=("TkDefaultFont", 9))
+        isb = ttk.Scrollbar(issues_box, orient="vertical", command=self.issues.yview)
+        self.issues.configure(yscrollcommand=isb.set)
+        self.issues.pack(side="left", fill="x", expand=True)
+        isb.pack(side="right", fill="y")
+        self.issues.tag_configure("error", foreground="#b00020")
+        self.issues.tag_configure("warning", foreground="#a05a00")
+        self._set_issues([("info", "Click 'Check images' to inspect sizes, channels, frames, pixel size and bit "
+                                   "depth against the current parameters. The check also runs before each batch.")])
         return f
 
     def _build_params(self, parent):
@@ -313,16 +338,69 @@ class App(tk.Tk):
         return f
 
     # ------------------------------------------------------------------ images
+    def _image_list(self) -> list[str]:
+        return [self.image_paths[i] for i in self.files.get_children()]
+
     def _count(self):
-        self.count_lbl.configure(text=f"{self.files.size()} images")
+        self.count_lbl.configure(text=f"{len(self.image_paths)} images")
 
     def _add_paths(self, paths):
-        existing = set(self.files.get(0, "end"))
+        existing = set(self.image_paths.values())
         for p in paths:
             if str(p) not in existing:
-                self.files.insert("end", str(p))
+                iid = self.files.insert("", "end", text=Path(p).name, values=("",) * 7)
+                self.image_paths[iid] = str(p)
                 existing.add(str(p))
         self._count()
+
+    def _clear_images(self):
+        self.files.delete(*self.files.get_children())
+        self.image_paths.clear()
+        self._count()
+
+    def _check_images(self, quiet=False) -> PrecheckResult | None:
+        inputs = self._image_list()
+        if not inputs:
+            if not quiet:
+                messagebox.showinfo("No images", "Add some images first.")
+            return None
+        e = self.engine.get()
+        self.configure(cursor="watch")
+        self.update_idletasks()
+        try:
+            result = precheck(e, self.params[e], inputs)
+        finally:
+            self.configure(cursor="")
+        self.precheck_result = result
+        by_path = {im.path: im for im in result.images}
+        for iid in self.files.get_children():
+            im = by_path[self.image_paths[iid]]
+            status = result.status_of(im.path)
+            if im.inspected:
+                bits = "float" if im.is_float else str(im.bit_depth)
+                vals = (im.size_text(), im.channels, im.slices, im.frames, im.pixel_text(), bits, status)
+            else:
+                vals = ("?", "?", "?", "?", "?", "?", status)
+            self.files.item(iid, values=vals, tags=(status,) if status in ("error", "warning") else ())
+        self._show_image_issues()
+        return result
+
+    def _set_issues(self, items):
+        self.issues.configure(state="normal")
+        self.issues.delete("1.0", "end")
+        for level, text in items:
+            self.issues.insert("end", text + "\n", (level,))
+        self.issues.configure(state="disabled")
+
+    def _show_image_issues(self):
+        res = self.precheck_result
+        if res is None:
+            return
+        selected = {self.image_paths[i] for i in self.files.selection()}
+        shown = [i for i in res.issues if i.image is None or i.image in selected] if selected else res.issues
+        summary = f"{len(res.errors)} error(s), {len(res.warnings)} warning(s)" + (
+            " - select an image to see only its issues" if not selected else "")
+        self._set_issues([("info", summary)] + [(i.level, str(i)) for i in shown])
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(title="Select images", filetypes=[
@@ -347,8 +425,9 @@ class App(tk.Tk):
         self._add_paths(found)
 
     def _remove_selected(self):
-        for i in reversed(self.files.curselection()):
-            self.files.delete(i)
+        for iid in self.files.selection():
+            self.image_paths.pop(iid, None)
+            self.files.delete(iid)
         self._count()
 
     # ------------------------------------------------------------------ params
@@ -474,13 +553,29 @@ class App(tk.Tk):
     def _run(self):
         if self.worker and self.worker.is_alive():
             return
-        inputs = list(self.files.get(0, "end"))
+        inputs = self._image_list()
         if not inputs:
             messagebox.showerror("No images", "Add some images on the Images tab first.")
             return
         if not self.output.get():
             messagebox.showerror("No output", "Choose an output folder.")
             return
+        check = self._check_images(quiet=True)
+        if check is not None:
+            try:
+                Path(self.output.get()).mkdir(parents=True, exist_ok=True)
+                (Path(self.output.get()) / "precheck.txt").write_text(check.report() + "\n", encoding="utf-8")
+            except OSError:
+                pass
+            if check.errors and not self.dry.get():
+                bad = sorted({Path(i.image).name for i in check.errors if i.image})
+                listing = "\n".join(f"  • {n}" for n in bad[:10]) + ("\n  …" if len(bad) > 10 else "")
+                if not messagebox.askyesno(
+                        "Pre-check found problems",
+                        f"{len(check.errors)} error(s) in {len(bad) or 'the'} image(s):\n{listing}\n\n"
+                        "These images will probably fail. Details are on the Images tab.\n\nRun anyway?"):
+                    self.nb.select(0)
+                    return
         self._save_settings()
         e = self.engine.get()
         cfg = BatchConfig(
@@ -497,6 +592,10 @@ class App(tk.Tk):
         self.run_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self._log(f"=== {ENGINE_LABELS[e]}: {len(inputs)} image(s) -> {cfg.output_dir}")
+        if check is not None:
+            for issue in check.issues:
+                if issue.level != "info":
+                    self._log(f"pre-check: {issue}")
 
         def work():
             try:
@@ -548,7 +647,7 @@ class App(tk.Tk):
         from .batch import STATUS_FILE, build_jobs
         if not self.output.get() or self.dry.get():
             return
-        cfg = BatchConfig(self.engine.get(), {}, list(self.files.get(0, "end")), self.output.get())
+        cfg = BatchConfig(self.engine.get(), {}, self._image_list(), self.output.get())
         for job in build_jobs(cfg):
             sp = Path(job.output_dir) / STATUS_FILE
             if sp.exists() and job.id in self.job_rows:

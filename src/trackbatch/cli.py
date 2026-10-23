@@ -4,6 +4,7 @@ Examples::
 
     trackbatch run -e trackmate -i movies/ --pattern "*.tif" -o results/ --set detector.RADIUS=3
     trackbatch run -e utrack -i movies/ -o results/ --from-previous old/tracking.mat
+    trackbatch check -e trackmate -i movies/ --set detector.TARGET_CHANNEL=2
     trackbatch params -e trackmate --from-previous old_run.xml -o params.json
     trackbatch gui
 """
@@ -18,6 +19,7 @@ from . import __version__
 from . import params as P
 from . import tools
 from .batch import BatchConfig, discover_inputs, run_batch
+from .precheck import precheck
 from .previous import load_previous, matlab_export_params
 
 
@@ -71,12 +73,33 @@ def cmd_run(args) -> int:
         source=source,
     )
     print(f"{engine}: {len(inputs)} image(s) -> {Path(args.output).resolve()}")
+    if not args.no_precheck:
+        result = precheck(engine, params, inputs)
+        report = result.report()
+        print(report)
+        Path(args.output).mkdir(parents=True, exist_ok=True)
+        (Path(args.output) / "precheck.txt").write_text(report + "\n", encoding="utf-8")
+        if result.errors and not args.dry_run:
+            print(f"error: pre-check found {len(result.errors)} problem(s); fix them, remove those images, "
+                  "or pass --no-precheck to run anyway", file=sys.stderr)
+            return 2
     try:
         jobs = run_batch(cfg)
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0 if all(j.status in ("ok", "skipped", "pending") for j in jobs) else 1
+
+
+def cmd_check(args) -> int:
+    engine, params, _, prev_inputs = _resolve_params(args)
+    raw_inputs = list(args.input or []) + (prev_inputs if args.reuse_inputs else [])
+    if not raw_inputs:
+        raise SystemExit("No inputs: use -i/--input (files or folders) or --reuse-inputs")
+    inputs = [str(p) for p in discover_inputs(raw_inputs, args.pattern, args.recursive)]
+    result = precheck(engine, params, inputs)
+    print(result.report())
+    return 1 if result.errors else 0
 
 
 def cmd_params(args) -> int:
@@ -128,12 +151,17 @@ def build_parser() -> argparse.ArgumentParser:
                        help="override one parameter, e.g. detector.RADIUS=3 or "
                             "tracking.gapCloseParam.timeWindow=7 (repeatable)")
 
+    def add_input_args(p):
+        p.add_argument("-i", "--input", action="append", help="image file or folder (repeatable)")
+        p.add_argument("--pattern", help="glob for folders, e.g. '*.tif' (default: common image types)")
+        p.add_argument("-r", "--recursive", action="store_true", help="search folders recursively")
+        p.add_argument("--reuse-inputs", action="store_true", help="also process the images of --from-previous")
+
     run = sub.add_parser("run", help="run a batch")
     add_param_args(run)
-    run.add_argument("-i", "--input", action="append", help="image file or folder (repeatable)")
-    run.add_argument("--pattern", help="glob for folders, e.g. '*.tif' (default: common image types)")
-    run.add_argument("-r", "--recursive", action="store_true", help="search folders recursively")
-    run.add_argument("--reuse-inputs", action="store_true", help="also process the images of --from-previous")
+    add_input_args(run)
+    run.add_argument("--no-precheck", action="store_true",
+                     help="don't inspect the images first (errors found by the pre-check normally stop the run)")
     run.add_argument("-o", "--output", required=True, help="output folder")
     run.add_argument("-w", "--workers", type=int, default=1, help="parallel Fiji/MATLAB processes")
     run.add_argument("--skip-existing", action="store_true", help="skip images that already succeeded")
@@ -142,6 +170,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--matlab", help="matlab executable")
     run.add_argument("--utrack", help="u-track 'software' folder (added to the MATLAB path)")
     run.set_defaults(func=cmd_run)
+
+    chk = sub.add_parser("check", help="inspect images (size, channels, frames, calibration, bit depth) "
+                                       "against the parameters without running anything")
+    add_param_args(chk)
+    add_input_args(chk)
+    chk.set_defaults(func=cmd_check)
 
     prm = sub.add_parser("params", help="print/save a parameter set (defaults or from a previous run)")
     add_param_args(prm)

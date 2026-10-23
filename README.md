@@ -34,6 +34,9 @@ Pushing a tag such as `v0.2.0` also publishes both files as a GitHub Release.
        re-add that run's images.
    * **Save parameters…** writes a JSON file you can reuse or pass to the CLI.
 3. **Tools:** set the Fiji, MATLAB and u-track locations once. They are remembered in `~/.trackbatch/settings.json`.
+   **Check images** reads each file's header (no pixel data) and fills in size, channels, Z, frames,
+   pixel size and bit depth, then flags problems against the current parameters (see
+   [Pre-check](#pre-check)). Select an image to see only its issues.
 4. **Run:** pick an output folder and the number of parallel workers, then run. Progress and the
    tool log are shown live. *Skip images that already succeeded* lets you resume an
    interrupted batch.
@@ -53,6 +56,9 @@ trackbatch run -e utrack --from-previous old/tracking.mat -i data/ -o results_ut
 
 # Re-run an earlier batch (same images and parameters), skipping finished images
 trackbatch run --from-previous results/trackbatch_run.json --reuse-inputs -o results/ --skip-existing
+
+# Inspect images against the parameters without running anything (exit code 1 if there are errors)
+trackbatch check -e trackmate -i data/ --set detector.TARGET_CHANNEL=2
 
 # Get a parameter file to edit (defaults or from a previous run)
 trackbatch params -e utrack -o utrack_params.json
@@ -100,10 +106,35 @@ a Double, as TrackMate expects. Unknown keys are dropped with a warning in the l
 u-track batches are 2D (as in the u-track standalone scripts). Multi-channel ImageJ TIFF
 hyperstacks are supported. Other formats are read with Bio-Formats, which ships with u-track.
 
+## Pre-check
+
+Before every run, both the GUI and `trackbatch run` inspect the images, and `trackbatch check` does it on its own.
+The report is saved as `precheck.txt` in the output folder. Errors stop the run before Fiji or MATLAB start.
+The GUI asks whether to run anyway; on the command line, pass `--no-precheck`. Warnings are logged, and the run continues.
+
+Images of **different sizes are fine**, because each image is analysed in full. The check looks for the
+things that do go wrong in mixed batches:
+
+| Check | Level |
+|---|---|
+| File missing or not a readable TIFF | error |
+| Requested channel (`TARGET_CHANNEL` / `image.channel`) not in the image | error |
+| u-track: 3D movie (the batch is 2D), or `first_frame` past the end of the movie | error |
+| Only one time point | warning |
+| TrackMate: no pixel calibration, so distances are in pixels (unless `calibration` is set) | warning |
+| u-track: float pixels (converted to uint16), or bit depth below `detectionParam.bitDepth` | warning |
+| Pixel size differs between images: for u-track (pixel units), or when a TrackMate calibration override forces one size | warning |
+| Bit depth, channel count or frame interval differs between images | warning |
+| Z-slices with one frame will be treated as time; sizes or pixel sizes differ in TrackMate (physical units) | info |
+
+TIFF variants (ImageJ hyperstacks, OME-TIFF, plain multi-page TIFF) are inspected. Other formats
+(`.nd2`, `.czi`, …) are listed as *not inspected*, because they are only opened by Bio-Formats at run time.
+
 ## Output
 
 ```
 results/
+  precheck.txt               # image table + issues found before the run
   trackbatch_run.json        # engine, parameters, images, per-image status (reload as "previous run")
   batch_summary.csv          # one row per image: status, counts, runtime, error
   _trackbatch/               # generated worker scripts + manifests (handy for debugging)

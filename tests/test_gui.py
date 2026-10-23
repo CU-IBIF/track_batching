@@ -77,3 +77,29 @@ def test_load_edit_and_dry_run(app, tmp_path):
     m = json.loads((tmp_path / "out" / "_trackbatch" / "manifest_0.json").read_text())
     assert m["params"]["detector"]["RADIUS"] == 0.5
     assert m["params"]["tracker"]["TRACKER_NAME"] == "KALMAN_TRACKER"
+
+
+def test_check_images_table_and_run_guard(app, tmp_path):
+    import numpy as np
+    import tifffile
+
+    good = tmp_path / "good.tif"
+    tifffile.imwrite(good, np.zeros((4, 2, 20, 30), np.uint16), imagej=True, resolution=(10, 10),
+                     metadata={"axes": "TCYX", "unit": "um"})
+    bad = tmp_path / "bad.tif"
+    bad.write_bytes(b"II*\x00junk")
+    app._add_paths([str(good), str(bad)])
+    result = app._check_images()
+    rows = {app.files.item(i, "text"): app.files.item(i, "values") for i in app.files.get_children()}
+    assert rows["good.tif"][0] == "30x20" and str(rows["good.tif"][1]) == "2" and rows["good.tif"][-1] == "ok"
+    assert rows["bad.tif"][-1] == "error"
+    assert len(result.errors) == 1
+    assert "not a readable TIFF" in app.issues.get("1.0", "end")
+
+    # A real (non-dry) run with errors asks first; answering "no" starts nothing.
+    app.output.set(str(tmp_path / "out"))
+    with mock.patch.object(gui.messagebox, "askyesno", return_value=False) as ask:
+        app._run()
+    assert ask.called and app.worker is None
+    assert (tmp_path / "out" / "precheck.txt").exists()
+    assert not (tmp_path / "out" / "_trackbatch").exists()

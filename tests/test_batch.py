@@ -14,10 +14,17 @@ from trackbatch.previous import load_previous
 
 
 def _images(tmp_path, names):
+    import numpy as np
+    import tifffile
+
     d = tmp_path / "imgs"
     d.mkdir()
     for n in names:
-        (d / n).write_bytes(b"II*\x00")
+        if n.lower().endswith((".tif", ".tiff")):
+            tifffile.imwrite(d / n, np.zeros((3, 8, 8), np.uint16), imagej=True, resolution=(10, 10),
+                             metadata={"axes": "TYX", "unit": "um"})
+        else:
+            (d / n).write_bytes(b"x")
     return d
 
 
@@ -118,3 +125,18 @@ def test_params_command(tmp_path, capsys):
     assert data["engine"] == "trackmate"
     assert data["params"]["detector"]["THRESHOLD"] == 20
     assert data["params"]["detector"]["DETECTOR_NAME"] == "DOG_DETECTOR"
+
+
+def test_run_stops_on_precheck_errors(tmp_path, capsys):
+    d = _images(tmp_path, ["a.tif"])
+    (d / "broken.tif").write_bytes(b"II*\x00junk")
+    out = tmp_path / "out"
+    code = cli_main(["run", "-e", "trackmate", "-i", str(d), "-o", str(out), "--fiji", str(tmp_path / "nope")])
+    assert code == 2
+    assert "pre-check found 1 problem" in capsys.readouterr().err
+    assert "broken.tif" in (out / "precheck.txt").read_text()
+    assert not (out / "_trackbatch").exists()  # nothing was started
+    # --no-precheck goes on to the tool check instead
+    code = cli_main(["run", "-e", "trackmate", "-i", str(d), "-o", str(out), "--fiji", str(tmp_path / "nope"),
+                     "--no-precheck"])
+    assert code == 2 and "Fiji not found" in capsys.readouterr().err
