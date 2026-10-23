@@ -17,27 +17,44 @@ from trackbatch import params as P  # noqa: E402
 XML = Path(__file__).parent / "data" / "previous_trackmate.xml"
 
 
-def _create_app(attempts=5):
-    # On Windows, creating many Tk interpreters in one process intermittently fails with
-    # "Can't find a usable init.tcl ... couldn't read file ...: No error" (a Tcl quirk; the
-    # real app only ever creates one). Retrying the creation is enough.
-    for attempt in range(attempts):
-        try:
-            return gui.App()
-        except tk.TclError as exc:
-            if "init.tcl" not in str(exc) or attempt == attempts - 1:
-                raise
-            time.sleep(0.5)
+@pytest.fixture(scope="session")
+def _session_app(tmp_path_factory):
+    # One Tk window for the whole session: on Windows, creating many Tk interpreters in one
+    # process intermittently fails ("Can't find a usable init.tcl ... No error", then
+    # "invalid command name tcl_findLibrary"). The real app only ever creates one.
+    cfg = tmp_path_factory.mktemp("cfg")
+    with mock.patch.object(gui.tools, "CONFIG_DIR", cfg), \
+         mock.patch.object(gui.tools, "CONFIG_FILE", cfg / "settings.json"):
+        a = gui.App()
+        a.update()
+        yield a
+        a.destroy()
 
 
 @pytest.fixture
-def app(tmp_path, monkeypatch):
-    monkeypatch.setattr(gui.tools, "CONFIG_DIR", tmp_path / "cfg")
-    monkeypatch.setattr(gui.tools, "CONFIG_FILE", tmp_path / "cfg" / "settings.json")
-    a = _create_app()
+def app(_session_app):
+    a = _session_app
+    # Reset everything a test may have changed.
+    if a.worker is not None:
+        a.worker.join(timeout=30)
+    a.worker = None
+    a._clear_images()
+    a.params = {e: P.defaults(e) for e in P.ENGINES}
+    a.sources = {e: None for e in P.ENGINES}
+    a.engine.set("trackmate")
+    a._engine_changed()
+    a.output.set("")
+    a.dry.set(False)
+    a.skip.set(False)
+    a.jobs.delete(*a.jobs.get_children())
+    a.job_rows, a.job_state = {}, {}
+    a.stop_event.clear()
+    a.update()
+    a.log_entries.clear()
+    a._redraw_log()
+    a.nb.select(0)
     a.update()
     yield a
-    a.destroy()
 
 
 def test_load_edit_and_dry_run(app, tmp_path):
