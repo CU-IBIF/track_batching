@@ -80,18 +80,22 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install . pyinstaller
+        run: pip install -e ".[dev]"
+
+      # Catches Windows-only problems (paths like C:/x vs C:\x, Tk behaviour) before building.
+      - name: Run tests on Windows
+        run: pytest -v
 
       - name: Build GUI exe
         run: >
           pyinstaller --noconfirm --clean --onefile --windowed
-          --name TrackBatch --collect-data trackbatch
+          --name TrackBatch --collect-data trackbatch --collect-all tkinterdnd2
           packaging/trackbatch_entry.py
 
       - name: Build console exe
         run: >
           pyinstaller --noconfirm --onefile --console
-          --name trackbatch-cli --collect-data trackbatch
+          --name trackbatch-cli --collect-data trackbatch --collect-all tkinterdnd2
           packaging/trackbatch_entry.py
 
       - name: Smoke test the console exe
@@ -111,6 +115,16 @@ jobs:
           .\dist\trackbatch-cli.exe check -e trackmate -i smoke
           if ($LASTEXITCODE -ne 1) { throw "check should have flagged the invalid TIFF" }
           $global:LASTEXITCODE = 0
+
+      - name: Self-test the GUI exe (opens the window, drag-and-drop library, image reading)
+        shell: pwsh
+        run: |
+          $report = Join-Path $PWD "selftest.json"
+          $p = Start-Process -FilePath .\dist\TrackBatch.exe -ArgumentList @("selftest", "--report", $report) -PassThru
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); throw "GUI self-test timed out" }
+          Get-Content $report
+          $r = Get-Content $report | ConvertFrom-Json
+          if (-not $r.ok) { throw "GUI self-test failed" }
 
       - name: Upload exe
         uses: actions/upload-artifact@v4

@@ -194,7 +194,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = sub.add_parser("gui", help="open the graphical interface")
     gui.set_defaults(func=lambda a: _gui())
+
+    st = sub.add_parser("selftest", help=argparse.SUPPRESS)  # used by CI on the built exe
+    st.add_argument("--report", required=True)
+    st.set_defaults(func=lambda a: _selftest(a.report))
     return ap
+
+
+def _selftest(report: str) -> int:
+    from .gui import selftest
+
+    return selftest(report)
 
 
 def _gui() -> int:
@@ -205,6 +215,13 @@ def _gui() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        # Windows consoles may not be UTF-8 (e.g. "µm" in reports); never crash on printing.
+        if stream is not None and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:

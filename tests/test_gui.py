@@ -103,3 +103,102 @@ def test_check_images_table_and_run_guard(app, tmp_path):
     assert ask.called and app.worker is None
     assert (tmp_path / "out" / "precheck.txt").exists()
     assert not (tmp_path / "out" / "_trackbatch").exists()
+
+
+def _tiff(path, shape=(4, 2, 20, 30), axes="TCYX"):
+    import numpy as np
+    import tifffile
+
+    tifffile.imwrite(path, np.zeros(shape, np.uint16), imagej=True, resolution=(10, 10),
+                     metadata={"axes": axes, "unit": "um"})
+    return path
+
+
+def _log_text(app):
+    return "\n".join(msg for _, _, msg in app.log_entries)
+
+
+def _pump(app, seconds=0.3):
+    t0 = time.time()
+    while time.time() - t0 < seconds:
+        app.update()
+        time.sleep(0.02)
+
+
+def test_dimensions_shown_on_add_even_with_unnormalised_paths(app, tmp_path):
+    # Windows file dialogs return "C:/x/y.tif" while Path() gives "C:\\x\\y.tif"; "dir//y.tif" vs
+    # "dir/y.tif" reproduces the same mismatch on every OS. The table must still be filled in.
+    _tiff(tmp_path / "movie.tif")
+    odd = str(tmp_path) + "//movie.tif"
+    app._add_paths([odd])  # no explicit "Check images" click
+    row = app.files.item(app.files.get_children()[0], "values")
+    assert row[0] == "30x20" and str(row[1]) == "2" and str(row[3]) == "4" and row[-1] == "ok"
+    assert app._image_list() == [odd]
+
+
+def test_drop_files_and_folders(app, tmp_path):
+    folder = tmp_path / "drop"
+    folder.mkdir()
+    _tiff(folder / "a.tif")
+    _tiff(folder / "b.tif", (3, 16, 16), "TYX")
+    (folder / "notes.txt").write_text("x")
+    single = _tiff(tmp_path / "single.tif")
+    app.handle_dropped_paths([str(folder), str(single), str(tmp_path / "missing.tif")])
+    names = sorted(app.files.item(i, "text") for i in app.files.get_children())
+    assert names == ["a.tif", "b.tif", "single.tif"]
+    _pump(app)
+    text = _log_text(app)
+    assert "Dropped item not found" in text and "Added 3 image(s)" in text
+
+
+def test_drag_and_drop_is_enabled(app):
+    pytest.importorskip("tkinterdnd2")
+    assert app.dnd_error is None
+
+
+def test_gui_errors_are_logged_not_swallowed(app):
+    with mock.patch.object(gui.messagebox, "showerror") as shown:
+        try:
+            raise KeyError("C:\\data\\x.tif")
+        except KeyError:
+            import sys
+            app.report_callback_exception(*sys.exc_info())
+    assert shown.called
+    _pump(app)
+    assert "Unexpected error in the GUI" in _log_text(app)
+    log_file = gui.applog.current_log_file()
+    assert log_file and "Traceback" in log_file.read_text(encoding="utf-8")
+
+
+def test_run_problems_are_reported(app, tmp_path):
+    with mock.patch.object(gui.messagebox, "showerror") as shown:
+        app._run()  # no images
+    assert shown.called
+    _tiff(tmp_path / "m.tif")
+    app._add_paths([str(tmp_path / "m.tif")])
+    app.output.set("")
+    with mock.patch.object(gui.messagebox, "showerror"):
+        app._run()
+    _pump(app)
+    text = _log_text(app)
+    assert "'Run batch' clicked" in text and "Add some images" in text and "Choose an output folder" in text
+    assert "output folder" in app.status_lbl.cget("text")
+
+
+def test_dry_run_progress_and_log(app, tmp_path):
+    _tiff(tmp_path / "m1.tif")
+    _tiff(tmp_path / "m2.tif")
+    app._add_paths([str(tmp_path / "m1.tif"), str(tmp_path / "m2.tif")])
+    app.output.set(str(tmp_path / "out"))
+    app.dry.set(True)
+    app._run()
+    t0 = time.time()
+    while app.worker.is_alive() and time.time() - t0 < 20:
+        app.update()
+        time.sleep(0.02)
+    _pump(app)
+    text = _log_text(app)
+    assert "Starting TrackMate (Fiji) (dry run): 2 image(s)" in text
+    assert "[dry-run] worker 0" in text and "Dry run finished" in text
+    assert "Dry run finished" in app.status_lbl.cget("text")
+    assert (tmp_path / "out" / "_trackbatch" / "batch.log").exists()
