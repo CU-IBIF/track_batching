@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<TrackMate version="7.11.1">
+  <Model spatialunits="micron" timeunits="sec">
+    <FeatureDeclarations />
+    <AllSpots nspots="0" />
+    <AllTracks />
+    <FilteredTracks />
+  </Model>
+  <Settings>
+    <ImageData filename="cells_01.tif" folder="C:/data/exp1/" width="512" height="512" nslices="1" nframes="100" pixelwidth="0.108" pixelheight="0.108" voxeldepth="1.0" timeinterval="0.05" />
+    <BasicSettings xstart="0" xend="511" ystart="0" yend="511" zstart="0" zend="0" tstart="0" tend="99" />
+    <DetectorSettings DETECTOR_NAME="DOG_DETECTOR" TARGET_CHANNEL="2" RADIUS="0.35" THRESHOLD="12.5" DO_MEDIAN_FILTERING="true" DO_SUBPIXEL_LOCALIZATION="true" />
+    <InitialSpotFilter feature="QUALITY" value="3.0" isabove="true" />
+    <SpotFilterCollection>
+      <Filter feature="MEAN_INTENSITY_CH2" value="150.0" isabove="true" />
+    </SpotFilterCollection>
+    <TrackerSettings TRACKER_NAME="SPARSE_LAP_TRACKER" CUTOFF_PERCENTILE="0.9" ALTERNATIVE_LINKING_COST_FACTOR="1.05" BLOCKING_VALUE="Infinity">
+      <Linking LINKING_MAX_DISTANCE="0.8">
+        <FeaturePenalties MEAN_INTENSITY_CH2="0.5" />
+      </Linking>
+      <GapClosing ALLOW_GAP_CLOSING="true" GAP_CLOSING_MAX_DISTANCE="1.2" MAX_FRAME_GAP="3">
+        <FeaturePenalties />
+      </GapClosing>
+      <TrackSplitting ALLOW_TRACK_SPLITTING="false" SPLITTING_MAX_DISTANCE="15.0">
+        <FeaturePenalties />
+      </TrackSplitting>
+      <TrackMerging ALLOW_TRACK_MERGING="true" MERGING_MAX_DISTANCE="0.9">
+        <FeaturePenalties />
+      </TrackMerging>
+    </TrackerSettings>
+    <TrackFilterCollection>
+      <Filter feature="NUMBER_SPOTS" value="5.0" isabove="true" />
+    </TrackFilterCollection>
+    <AnalyzerCollection />
+  </Settings>
+</TrackMate>

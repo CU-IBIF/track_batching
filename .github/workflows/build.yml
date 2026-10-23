@@ -1,0 +1,117 @@
+name: Test and build Windows .exe
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Octave and Java (used to exercise the MATLAB / Fiji worker scripts)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends octave default-jre-headless
+
+      - name: Cache Jython
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/jython
+          key: jython-2.7.3
+
+      - name: Download Jython
+        run: |
+          mkdir -p ~/.cache/jython
+          test -f ~/.cache/jython/jython.jar || curl -sSfL --retry 4 -o ~/.cache/jython/jython.jar \
+            https://repo1.maven.org/maven2/org/python/jython-standalone/2.7.3/jython-standalone-2.7.3.jar
+          echo "JYTHON_JAR=$HOME/.cache/jython/jython.jar" >> "$GITHUB_ENV"
+
+      - name: Install package
+        run: pip install -e ".[dev]" tifffile
+
+      - name: Run tests
+        run: xvfb-run -a pytest -v
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install . pyinstaller
+
+      - name: Build GUI exe
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name TrackBatch --collect-data trackbatch
+          packaging/trackbatch_entry.py
+
+      - name: Build console exe
+        run: >
+          pyinstaller --noconfirm --onefile --console
+          --name trackbatch-cli --collect-data trackbatch
+          packaging/trackbatch_entry.py
+
+      - name: Smoke test the console exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          .\dist\trackbatch-cli.exe --version
+          .\dist\trackbatch-cli.exe params -e utrack -o utrack.json
+          .\dist\trackbatch-cli.exe params --from-previous tests\data\previous_trackmate.xml
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Set-Content smoke\a.tif "x"
+          .\dist\trackbatch-cli.exe run -e trackmate -i smoke -o smoke_out --dry-run
+          if (-not (Test-Path smoke_out\_trackbatch\trackmate_batch.py)) { throw "Jython script not bundled" }
+          .\dist\trackbatch-cli.exe run -e utrack -i smoke -o smoke_out2 --dry-run
+          if (-not (Test-Path smoke_out2\_trackbatch\trackbatch_utrack_batch.m)) { throw "MATLAB script not bundled" }
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrackBatch-windows-${{ github.sha }}
+          path: |
+            dist/TrackBatch.exe
+            dist/trackbatch-cli.exe
+            README.md
+          if-no-files-found: error
+
+  release:
+    # Push a tag like v0.2.0 to publish the exe as a GitHub Release.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: TrackBatch-windows-${{ github.sha }}
+          path: release
+
+      - name: Zip
+        run: cd release && zip -r ../TrackBatch-${{ github.ref_name }}-windows.zip .
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: TrackBatch-${{ github.ref_name }}-windows.zip
+          generate_release_notes: true
