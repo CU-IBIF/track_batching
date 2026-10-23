@@ -15,6 +15,7 @@ import os
 import platform
 import subprocess
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from importlib import resources
@@ -230,13 +231,38 @@ def run_batch(
         raise ValueError(f"Unknown engine {cfg.engine!r}")
     if not cfg.inputs:
         raise ValueError("No input images")
-    engine = ENGINES[cfg.engine]
     stop_event = stop_event or threading.Event()
 
     out_root = Path(cfg.output_dir).resolve()
     work_dir = out_root / WORK_DIR
     work_dir.mkdir(parents=True, exist_ok=True)
+    # Everything shown to the user also goes to <output>/_trackbatch/batch.log.
+    log_lock = threading.Lock()
+    log_fh = open(work_dir / "batch.log", "a", encoding="utf-8")
+    user_log = log
+
+    def log(msg: str) -> None:
+        with log_lock:
+            log_fh.write(f"{_dt.datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+            log_fh.flush()
+        user_log(msg)
+
+    try:
+        return _run_batch(cfg, log, progress, stop_event, work_dir)
+    except Exception as exc:
+        log(f"ERROR: batch aborted: {type(exc).__name__}: {exc}")
+        raise
+    finally:
+        log_fh.close()
+
+
+def _run_batch(cfg: BatchConfig, log: LogFn, progress: ProgressFn | None, stop_event: threading.Event,
+               work_dir: Path) -> list[Job]:
+    engine = ENGINES[cfg.engine]
+    log(f"=== trackbatch {__version__}: {cfg.engine}, {len(cfg.inputs)} image(s), {cfg.workers} worker(s)"
+        f"{', dry run' if cfg.dry_run else ''}, output {Path(cfg.output_dir).resolve()}")
     engine.install(work_dir)
+    log(f"Worker scripts written to {work_dir}")
 
     jobs = build_jobs(cfg)
     todo: list[Job] = []
@@ -265,6 +291,11 @@ def run_batch(
         problems = engine.check(cfg)
         if problems:
             raise RuntimeError("\n".join(problems))
+        tool = (tools.resolve_fiji(cfg.fiji_path) if cfg.engine == "trackmate"
+                else tools.resolve_matlab(cfg.matlab_path))
+        log(f"Using {tool}")
+    if not todo:
+        log("Nothing to do - every image was skipped")
 
     n_workers = max(1, min(cfg.workers, len(todo))) if todo else 0
     chunks = [todo[i::n_workers] for i in range(n_workers)]
@@ -293,11 +324,23 @@ def run_batch(
         kwargs = {}
         if platform.system() == "Windows":
             kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        log(f"Worker {k}: starting {Path(cmd[0]).name} for {len(chunk)} image(s)")
-        proc = subprocess.Popen(
-            cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            text=True, encoding="utf-8", errors="replace", bufsize=1, **kwargs,
-        )
+        log(f"Worker {k}: starting for {len(chunk)} image(s): {subprocess.list2cmdline(cmd)}")
+        for key, value in extra_env.items():
+            log(f"Worker {k}: {key}={value}")
+        t_start = time.monotonic()
+        markers = 0
+        try:
+            proc = subprocess.Popen(
+                cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                text=True, encoding="utf-8", errors="replace", bufsize=1, **kwargs,
+            )
+        except OSError as exc:
+            log(f"Worker {k}: could not start {cmd[0]}: {exc}")
+            for job in chunk:
+                job.status, job.error = "failed", f"could not start {Path(cmd[0]).name}: {exc}"
+                if progress:
+                    progress(job)
+            return
         assert proc.stdout is not None
         for line in proc.stdout:
             line = line.rstrip()
@@ -306,6 +349,7 @@ def run_batch(
             log(f"[{k}] {line}")
             # Progress markers printed by the worker scripts.
             if line.startswith("[trackbatch] JOB "):
+                markers += 1
                 parts = line.split()
                 try:
                     job = by_id[int(parts[2])]
@@ -322,6 +366,11 @@ def run_batch(
                 proc.terminate()
                 break
         code = proc.wait()
+        log(f"Worker {k}: exited with code {code} after {time.monotonic() - t_start:.1f} s")
+        if markers == 0 and not stop_event.is_set():
+            log(f"Worker {k}: WARNING - no TrackBatch progress lines were printed, so the worker script "
+                "probably never ran. Check the tool path and the output above; you can re-run the command "
+                "shown at the start of this worker in a terminal to see the full error.")
         for job in chunk:
             _read_status(job)
             if job.status in ("pending", "running"):

@@ -26,7 +26,9 @@ A GitHub Release with both files (zipped) is published automatically when:
 
 ## GUI workflow
 
-1. **Images:** add files or whole folders (with a glob pattern such as `*.tif`, optionally recursive).
+1. **Images:** drag files or folders from Explorer / Finder onto the list, or use **Add files… / Add folder…**
+   (with a glob pattern such as `*.tif`, optionally recursive). Each image's width × height, channels, Z,
+   frames, pixel size and bit depth are read as soon as it is added.
 2. **Parameters:** pick the engine, then edit any value in the tree (double-click a value).
    * **Load from previous run…** accepts:
      * `trackmate.xml` / any TrackMate XML saved from Fiji (detector, tracker, spot/track filters)
@@ -37,12 +39,28 @@ A GitHub Release with both files (zipped) is published automatically when:
        re-add that run's images.
    * **Save parameters…** writes a JSON file you can reuse or pass to the CLI.
 3. **Tools:** set the Fiji, MATLAB and u-track locations once. They are remembered in `~/.trackbatch/settings.json`.
-   **Check images** reads each file's header (no pixel data) and fills in size, channels, Z, frames,
-   pixel size and bit depth, then flags problems against the current parameters (see
-   [Pre-check](#pre-check)). Select an image to see only its issues.
-4. **Run:** pick an output folder and the number of parallel workers, then run. Progress and the
-   tool log are shown live. *Skip images that already succeeded* lets you resume an
+   Images are checked against the current parameters (see [Pre-check](#pre-check)) when added, when the
+   engine changes and before each run; **Check images** re-runs it after you change parameters.
+   Select an image to see only its issues.
+4. **Run:** pick an output folder and the number of parallel workers, then run. The Run tab shows
+   each image's status and result/error. *Skip images that already succeeded* lets you resume an
    interrupted batch.
+
+### Activity log and troubleshooting
+
+* The **status bar** (bottom) shows what is happening now: header reading, *Running: 3/10 done ·
+  now: movie_04.tif*, elapsed time and an estimated time remaining.
+* The **activity log** (bottom panel, visible on every tab) records every action: images added, checks,
+  parameter edits, the exact Fiji/MATLAB command, all of its output, exit codes and errors.
+  **Show details** adds per-image header information. **Copy** puts the log on the clipboard
+  for sharing.
+* Every session is also written to `~/.trackbatch/logs/trackbatch_<date>_<time>.log` (**Open log file** /
+  **Open log folder**). The last 30 sessions are kept. Unexpected errors are written there with a full traceback
+  and shown in a dialog instead of failing silently.
+* Each batch writes `<output>/_trackbatch/batch.log` with the commands and complete tool output.
+* If a Fiji/MATLAB worker exits without printing any TrackBatch progress lines, the log says so. The
+  usual causes are a wrong tool path or a Fiji/MATLAB start-up problem. The exact command is in the log, so you
+  can run it in a terminal to see the full error.
 
 ## Command line
 
@@ -140,7 +158,7 @@ results/
   precheck.txt               # image table + issues found before the run
   trackbatch_run.json        # engine, parameters, images, per-image status (reload as "previous run")
   batch_summary.csv          # one row per image: status, counts, runtime, error
-  _trackbatch/               # generated worker scripts + manifests (handy for debugging)
+  _trackbatch/               # generated worker scripts, manifests and batch.log (handy for debugging)
   <image name>/
     trackbatch_params.json   # the parameters used for this image
     trackbatch_status.json

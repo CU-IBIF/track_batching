@@ -10,6 +10,7 @@ from __future__ import annotations
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 TIFF_SUFFIXES = (".tif", ".tiff")
 # Units that mean "not calibrated"
@@ -119,8 +120,10 @@ def _ome_info(info: ImageInfo, ome_xml: str) -> None:
 
 
 def inspect_image(path: str | Path) -> ImageInfo:
-    path = Path(path)
+    # Keep the caller's spelling of the path (e.g. "C:/x.tif" from a file dialog) so
+    # results can be matched back to the input; Path() would turn it into "C:\\x.tif".
     info = ImageInfo(str(path))
+    path = Path(path)
     if not path.name.lower().endswith(TIFF_SUFFIXES):
         info.readable = path.is_file()
         info.note = "not inspected (opened with Bio-Formats at run time)"
@@ -181,8 +184,21 @@ def _close(a: float, b: float, rel: float = 1e-3) -> bool:
     return abs(a - b) <= rel * max(abs(a), abs(b))
 
 
-def precheck(engine: str, params: dict, inputs: list[str]) -> PrecheckResult:
-    images = [inspect_image(p) for p in inputs]
+def precheck(
+    engine: str,
+    params: dict,
+    inputs: list[str],
+    on_image: Callable[[int, int, ImageInfo], None] | None = None,
+) -> PrecheckResult:
+    """Inspect ``inputs`` (results keep their order) and check them against ``params``.
+
+    ``on_image(index, total, info)`` is called after each image header is read.
+    """
+    images = []
+    for k, p in enumerate(inputs):
+        images.append(inspect_image(p))
+        if on_image:
+            on_image(k, len(inputs), images[-1])
     res = PrecheckResult(images)
     add = res.issues.append
 

@@ -67,6 +67,7 @@ def test_dry_run_writes_scripts_and_manifests(tmp_path, engine):
     # every image folder has a reusable copy of the parameters
     assert load_previous(out / "a" / "trackbatch_params.json").engine == engine
     assert (out / "trackbatch_run.json").exists()
+    assert "[dry-run] worker 1" in (work / "batch.log").read_text()
 
 
 FAKE_FIJI = r'''#!PYTHON
@@ -99,6 +100,8 @@ def test_end_to_end_with_fake_fiji(tmp_path):
     assert run["params"]["detector"]["RADIUS"] == 4
     summary = (out / "batch_summary.csv").read_text()
     assert "n_spots" in summary and "boom" in summary
+    batch_log = (out / "_trackbatch" / "batch.log").read_text()
+    assert "exited with code 0" in batch_log and "[trackbatch] JOB" in batch_log
 
     # Re-run with the previous run's parameters, skipping finished images.
     code = cli_main(["run", "--from-previous", str(out / "trackbatch_run.json"), "--reuse-inputs",
@@ -140,3 +143,18 @@ def test_run_stops_on_precheck_errors(tmp_path, capsys):
     code = cli_main(["run", "-e", "trackmate", "-i", str(d), "-o", str(out), "--fiji", str(tmp_path / "nope"),
                      "--no-precheck"])
     assert code == 2 and "Fiji not found" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="fake launcher uses a shebang")
+def test_silent_worker_is_flagged(tmp_path):
+    fake = tmp_path / "fiji-linux-x64"
+    fake.write_text("#!/bin/sh\necho 'Fiji says hello but never runs the script'\nexit 3\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    d = _images(tmp_path, ["a.tif"])
+    out = tmp_path / "out"
+    code = cli_main(["run", "-e", "trackmate", "-i", str(d), "-o", str(out), "--fiji", str(fake)])
+    assert code == 1
+    batch_log = (out / "_trackbatch" / "batch.log").read_text()
+    assert "exited with code 3" in batch_log and "no TrackBatch progress lines" in batch_log
+    run = json.loads((out / "trackbatch_run.json").read_text())
+    assert "exited with code 3" in run["jobs"][0]["error"]
