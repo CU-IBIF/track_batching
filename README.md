@@ -19,7 +19,10 @@ Every push and pull request runs the tests and then builds Windows executables
 * `TrackBatch.exe` is the GUI. Double-click it.
 * `trackbatch-cli.exe` is the same program for scripts and terminals.
 
-Pushing a tag such as `v0.2.0` also publishes both files as a GitHub Release.
+A GitHub Release with both files (zipped) is published automatically when:
+* `main` gets a new version number in `pyproject.toml` (and `src/trackbatch/__init__.py`), so bumping the
+  version and pushing to `main` creates the tag `v<version>` and its release, or
+* you push a tag such as `v0.3.0`.
 
 ## GUI workflow
 

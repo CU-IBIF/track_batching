@@ -123,22 +123,49 @@ jobs:
           if-no-files-found: error
 
   release:
-    # Push a tag like v0.2.0 to publish the exe as a GitHub Release.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Publishes a GitHub Release with the exe files when either
+    #  - a tag like v0.3.0 is pushed, or
+    #  - main is pushed with a version in pyproject.toml that has no tag yet
+    #    (the release creates the tag v<version> on that commit).
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     needs: build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Decide release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="v$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")"
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+              echo "Release $tag already exists - nothing to do"
+              tag=""
+            fi
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
+        if: steps.tag.outputs.tag != ''
         with:
           name: TrackBatch-windows-${{ github.sha }}
           path: release
 
       - name: Zip
-        run: cd release && zip -r ../TrackBatch-${{ github.ref_name }}-windows.zip .
+        if: steps.tag.outputs.tag != ''
+        run: cd release && zip -r ../TrackBatch-${{ steps.tag.outputs.tag }}-windows.zip .
 
       - uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.tag != ''
         with:
-          files: TrackBatch-${{ github.ref_name }}-windows.zip
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: TrackBatch ${{ steps.tag.outputs.tag }}
+          files: TrackBatch-${{ steps.tag.outputs.tag }}-windows.zip
           generate_release_notes: true
