@@ -80,11 +80,11 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" pytest-github-actions-annotate-failures
 
       # Catches Windows-only problems (paths like C:/x vs C:\x, Tk behaviour) before building.
       - name: Run tests on Windows
-        run: pytest -v
+        run: pytest -v -rA -p pytest_github_actions_annotate_failures
 
       - name: Build GUI exe
         run: >
