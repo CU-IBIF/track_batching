@@ -13,6 +13,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -21,18 +22,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Octave and Java (used to exercise the MATLAB / Fiji worker scripts)
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends octave default-jre-headless
-
       - name: Cache Jython
         uses: actions/cache@v4
         with:
           path: ~/.cache/jython
           key: jython-2.7.3
 
-      - name: Download Jython
+      - name: Download Jython (runs the Fiji worker script against stubs)
         run: |
           mkdir -p ~/.cache/jython
           test -f ~/.cache/jython/jython.jar || curl -sSfL --retry 4 -o ~/.cache/jython/jython.jar \
@@ -45,9 +41,36 @@ jobs:
       - name: Run tests
         run: xvfb-run -a pytest -v
 
+  # The MATLAB worker script is exercised under GNU Octave. Installing Octave is
+  # slow, so this runs alongside the build instead of gating it.
+  test-matlab-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Octave
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends octave
+
+      - name: Install package
+        run: pip install -e ".[dev]" tifffile
+
+      - name: Run Octave worker tests
+        run: pytest -v tests/test_workers.py -k octave
+
   build-windows:
     needs: test
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
