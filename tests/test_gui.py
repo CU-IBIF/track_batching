@@ -17,11 +17,24 @@ from trackbatch import params as P  # noqa: E402
 XML = Path(__file__).parent / "data" / "previous_trackmate.xml"
 
 
+def _create_app(attempts=5):
+    # On Windows, creating many Tk interpreters in one process intermittently fails with
+    # "Can't find a usable init.tcl ... couldn't read file ...: No error" (a Tcl quirk; the
+    # real app only ever creates one). Retrying the creation is enough.
+    for attempt in range(attempts):
+        try:
+            return gui.App()
+        except tk.TclError as exc:
+            if "init.tcl" not in str(exc) or attempt == attempts - 1:
+                raise
+            time.sleep(0.5)
+
+
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setattr(gui.tools, "CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.setattr(gui.tools, "CONFIG_FILE", tmp_path / "cfg" / "settings.json")
-    a = gui.App()
+    a = _create_app()
     a.update()
     yield a
     a.destroy()
