@@ -84,7 +84,7 @@ jobs:
 
       # Catches Windows-only problems (paths like C:/x vs C:\x, Tk behaviour) before building.
       - name: Run tests on Windows
-        run: pytest -v
+        run: pytest -v -rA
 
       - name: Build GUI exe
         run: >
